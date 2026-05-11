@@ -34,7 +34,7 @@ TARGETS = [
         "name": "한화손해보험",
         "url": "https://www.hanwhain.com/portal/apply/recruit",
         "conditions": [
-            {"type": "keyword_count_increase", "keyword": "한화손해보험"},
+            {"type": "keyword_count_increase", "keyword": "한화손보"},
         ],
     },
     {
