@@ -13,46 +13,45 @@ SNAPSHOT_FILE = "snapshots.json"
 # ── 모니터링 대상 목록 ────────────────────────────────────────────────────────
 TARGETS = [
 
-    # ══ 기준A : 그룹 통합 채용사이트 ══
-    # 키워드를 포함한 공고 수가 "늘어났을 때"만 알람
+    # ══ 기준A : 그룹 통합 채용사이트 (회사명 키워드 조건) ══
 
     {
         "name": "삼성생명",
         "url": "https://www.samsungcareers.com/hr/",
         "conditions": [
-            {"type": "keyword_count_increase", "keyword": "삼성생명"},
+            {"type": "keyword_appear", "keyword": "삼성생명"},
         ],
     },
     {
         "name": "삼성화재",
         "url": "https://www.samsungcareers.com/hr/",
         "conditions": [
-            {"type": "keyword_count_increase", "keyword": "삼성화재"},
+            {"type": "keyword_appear", "keyword": "삼성화재"},
         ],
     },
     {
         "name": "한화손해보험",
         "url": "https://www.hanwhain.com/portal/apply/recruit",
         "conditions": [
-            {"type": "keyword_count_increase", "keyword": "한화손보"},
+            {"type": "keyword_appear", "keyword": "한화손해보험"},
         ],
     },
     {
         "name": "한화생명",
         "url": "https://www.hanwhain.com/portal/apply/recruit",
         "conditions": [
-            {"type": "keyword_count_increase", "keyword": "한화생명"},
+            {"type": "keyword_appear", "keyword": "한화생명"},
         ],
     },
 
-    # ══ 기준B : 자사 단독 채용사이트 ══
-    # 새 공고가 추가됐을 때만 알람
+    # ══ 기준B : 자사 단독 채용사이트 (새 공고 등록 시 전부 알람) ══
 
     {
         "name": "신한라이프",
         "url": "https://shinhan-life.recruiter.co.kr/career/job",
         "conditions": [
             {"type": "new_post"},
+            {"type": "content_change"},
         ],
     },
     {
@@ -60,6 +59,7 @@ TARGETS = [
         "url": "https://hi.recruiter.co.kr/career/recruit",
         "conditions": [
             {"type": "new_post"},
+            {"type": "content_change"},
         ],
     },
     {
@@ -67,6 +67,7 @@ TARGETS = [
         "url": "https://kbinsure.recruiter.co.kr/app/jobnotice/list",
         "conditions": [
             {"type": "new_post"},
+            {"type": "content_change"},
         ],
     },
 ]
@@ -97,17 +98,17 @@ def fetch_page(url):
 
 def extract_text(html):
     soup = BeautifulSoup(html, "html.parser")
-    return soup.get_text(separator=" ", strip=True)
-
-def count_keyword(html, keyword):
-    """페이지 내 특정 키워드 등장 횟수"""
-    text = extract_text(html)
-    return text.count(keyword)
+    return soup.get_text(separator=" ", strip=True).lower()
 
 def count_items(html):
-    """목록 항목 수"""
     soup = BeautifulSoup(html, "html.parser")
+    # recruiter.co.kr 계열은 <li> 기반 목록 구조
     return len(soup.find_all(["li", "tr", "article"]))
+
+def content_hash(html):
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text(separator=" ", strip=True)
+    return hashlib.md5(text[:8000].encode()).hexdigest()
 
 # ── 텔레그램 발송 ─────────────────────────────────────────────────────────────
 
@@ -142,43 +143,44 @@ def check_target(target, snapshots):
         print(f"  ❌ 접근 실패: {e}")
         return
 
+    text = extract_text(html)
     prev = snapshots.get(key, {})
     triggered = []
 
     for cond in conditions:
         ctype = cond.get("type")
 
-        # 기준A 전용: 키워드 등장 횟수가 이전보다 늘었을 때만 알람
-        if ctype == "keyword_count_increase":
+        if ctype == "keyword_appear":
             kw = cond.get("keyword", "")
-            count = count_keyword(html, kw)
-            prev_count = prev.get(f"kw_count_{kw}")
-            print(f"  키워드 '{kw}' 현재:{count}회 / 이전:{prev_count}회")
-            if prev_count is not None and count > prev_count:
-                triggered.append(f'📋 <b>"{kw}"</b> 관련 신규 공고 감지! ({prev_count}건 → {count}건)')
-            snapshots.setdefault(key, {})[f"kw_count_{kw}"] = count
+            if kw.lower() in text:
+                triggered.append(f'🔑 키워드 <b>"{kw}"</b> 공고 발견!')
 
-        # 기준B 전용: 목록 항목 수가 늘었을 때만 알람
+        elif ctype == "content_change":
+            h = content_hash(html)
+            prev_hash = prev.get("hash")
+            if prev_hash and prev_hash != h:
+                triggered.append("📝 페이지 내용이 변경되었습니다")
+            snapshots.setdefault(key, {})["hash"] = h
+
         elif ctype == "new_post":
             count = count_items(html)
             prev_count = prev.get("count")
-            print(f"  공고 수 현재:{count}개 / 이전:{prev_count}개")
             if prev_count is not None and count > prev_count:
-                triggered.append(f"📋 신규 공고 감지! ({prev_count}개 → {count}개)")
+                triggered.append(f"📋 새 공고 감지! ({prev_count}개 → {count}개)")
             snapshots.setdefault(key, {})["count"] = count
 
     if triggered:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         msg = (
-            f"🚨 [채용공고 알람]\n\n"
-            f"🏢 {name}\n"
+            f"🚨 <b>[채용공고 알람]</b>\n\n"
+            f"🏢 <b>{name}</b>\n"
             f"🔗 {url}\n"
             f"⏰ {now}\n\n"
             + "\n".join(triggered)
         )
         send_telegram(msg)
     else:
-        print(f"  ✅ 변동 없음 — 알람 없음")
+        print(f"  ✅ 조건 미충족 — 이상 없음")
 
 # ── 메인 ──────────────────────────────────────────────────────────────────────
 
